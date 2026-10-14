@@ -14,12 +14,12 @@ import pymongo
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.errors import DuplicateKeyError
 
-load_dotenv()
+load_dotenv(override=False)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "attendance_db")
 
-client = MongoClient(MONGO_URI, tz_aware=True)
+client = MongoClient(MONGO_URI, tz_aware=True, serverSelectionTimeoutMS=5000)
 db = client[MONGO_DB]
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -191,19 +191,19 @@ class EmployeeCreate(BaseModel):
 
 class PunchInRequest(BaseModel):
     emp_code: str
-    punched_at: Optional[int] = Field(default=None, ge=EPOCH_MIN, le=EPOCH_MAX)
+    punched_at: Optional[int] = Field(default=None, strict=True, ge=EPOCH_MIN, le=EPOCH_MAX)
     status: Literal["PRESENT", "WFH", "ON_DUTY"] = "PRESENT"
 
 
 class PunchOutRequest(BaseModel):
     emp_code: str
-    punched_at: Optional[int] = Field(default=None, ge=EPOCH_MIN, le=EPOCH_MAX)
+    punched_at: Optional[int] = Field(default=None, strict=True, ge=EPOCH_MIN, le=EPOCH_MAX)
 
 
 class RegularizeRequest(BaseModel):
     status: Optional[Literal["PRESENT", "ABSENT", "LEAVE", "WFH", "ON_DUTY"]] = None
-    punch_in: Optional[int] = Field(default=None, ge=EPOCH_MIN, le=EPOCH_MAX)
-    punch_out: Optional[int] = Field(default=None, ge=EPOCH_MIN, le=EPOCH_MAX)
+    punch_in: Optional[int] = Field(default=None, strict=True, ge=EPOCH_MIN, le=EPOCH_MAX)
+    punch_out: Optional[int] = Field(default=None, strict=True, ge=EPOCH_MIN, le=EPOCH_MAX)
     reason: str = Field(min_length=5, max_length=200)
     regularized_by: str = Field(min_length=1, max_length=50)
 
