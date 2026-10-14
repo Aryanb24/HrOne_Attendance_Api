@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .env
+sample_data/
+sample_seed.py
+scratch/

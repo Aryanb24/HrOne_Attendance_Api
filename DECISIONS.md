@@ -1,16 +1,16 @@
 # DECISIONS.md
 
 1. **Indexes.**
-I created `employees: { emp_code: 1 }` (unique) to enforce identity and provide fast lookups during punches, and `{ department: 1 }` for department filtering and aggregations. For `attendance_logs`, I created `{ emp_code: 1, date: 1 }` (unique) to guarantee at most one record per employee-day and enable instantaneous natural-key lookups, `{ date: -1, emp_code: 1 }` to serve sorted paginated listing without in-memory sorting, and `{ status: 1 }` for status filtering. I considered an index on `{ "history.at": 1 }` but rejected it because history is an append-only audit trail that is never queried directly by any endpoint.
+I created unique `employees: {emp_code: 1}` for identity and punch lookups, `employees: {department: 1, joined_on: 1}` and `{joined_on: 1}` to eliminate COLLSCAN on department queries, unique `attendance_logs: {emp_code: 1, date: 1}` for natural-key lookups and punch-in idempotency, `{date: -1, emp_code: 1}` for indexed pagination, and `{date: 1, late_minutes: 1}` for the late leaderboard. I considered and rejected `{ "history.at": 1 }` because `history` is an append-only audit trail never queried directly.
 
 2. **Punch-in race.**
-Both requests validate against Pydantic, convert epoch milliseconds to IST attendance dates, and attempt an atomic `insert_one`. Because of the unique compound index on `(emp_code, date)`, MongoDB atomically accepts the first document and throws a `DuplicateKeyError` (E11000) on the second. The exception handler catches this and returns an immediate HTTP 409, guaranteeing no duplicate records without relying on vulnerable check-then-insert logic.
+Both concurrent requests pass validation and attempt atomic `insert_one`. MongoDB accepts the first document and rejects the second with a unique index violation (`DuplicateKeyError` on `emp_code, date`). FastAPI catches this exception and returns HTTP 409 to the second request, preventing race conditions without check-then-insert locking.
 
 3. **Ties.**
-When employees tie at the cutoff, the leaderboard returns all tied employees, exceeding `limit` if necessary. Following standard competition ranking (`$rank` window operator), tied individuals share the same rank and subsequent ranks are skipped (e.g., 1, 2, 2, 4). The contract specifies that `limit` filters by `rank <= limit`, not by row count, and orders tied rows by `emp_code` ascending.
+The pipeline uses MongoDB's `$rank` window function for standard competition ranking (e.g. 1, 2, 2, 4) and filters by `rank <= limit`. Any employees tied at the cutoff boundary are returned, exceeding `limit` if necessary, ordered by `emp_code` ascending per specification.
 
 4. **Headcount.**
-The pipeline begins on the `employees` collection filtered by `joined_on <= month_end`, and uses `$lookup` to join `attendance_logs` for that month. By keeping `preserveNullAndEmptyArrays: true` on `$unwind`, employees with zero attendance records are preserved and grouped into their department's `$addToSet: "$emp_code"`, accurately reflecting full headcount.
+The pipeline starts on `employees` filtered by `joined_on <= month_end`, and joins `attendance_logs` with `preserveNullAndEmptyArrays: true`. Employees without attendance logs remain in the stream with null logs and are counted in their department's distinct `$addToSet: "$emp_code"`.
 
 5. **One thing you would change for 100x data.**
-At 100x scale, running heavy multi-stage aggregations (such as `$lookup` with `$densify` and dynamic date parsing) on live operational collections would cause memory and CPU saturation. I would pre-aggregate daily department metrics and monthly rollups asynchronously via change streams or an out-of-band worker into dedicated summary collections, shard `attendance_logs` on `{ emp_code: "hashed", date: 1 }`, and serve analytics via point queries directly against pre-computed read models.
+I would maintain pre-aggregated daily summaries asynchronously using change streams or background workers and shard `attendance_logs` by `{emp_code: "hashed", date: 1}`, avoiding heavy real-time `$lookup` and `$densify` aggregations over 10M+ documents.
